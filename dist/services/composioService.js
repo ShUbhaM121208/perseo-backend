@@ -10,16 +10,28 @@ export async function getGmailTools(userId) {
         // Get all Gmail tools for the user
         const tools = await composio.tools.get(userId, { toolkits: ['GMAIL'] });
         console.log(`Found ${tools.length} Gmail tools`);
-        // Extract tool information
-        const toolsInfo = tools.map((tool) => ({
-            slug: tool.slug || 'No slug',
-            name: tool.name || 'No name',
-            displayName: tool.displayName || 'No displayName',
-            description: tool.description || 'No description',
-            parameters: tool.parameters || [],
-            // Categorize tools by operation type
-            category: categorizeGmailTool(tool.slug)
-        }));
+        console.log('Raw tools data (first tool):', JSON.stringify(tools[0], null, 2));
+        // Extract tool information with better error handling
+        const toolsInfo = tools.map((tool, index) => {
+            // Log the structure of each tool to understand the data format
+            if (index < 3) {
+                console.log(`Tool ${index} structure:`, Object.keys(tool));
+                console.log(`Tool ${index} function name:`, tool.function?.name);
+            }
+            // The correct structure is tool.function.name and tool.function.description
+            const slug = tool.function?.name || `tool_${index}`;
+            const name = tool.function?.name || `tool_${index}`;
+            const description = tool.function?.description || 'No description available';
+            return {
+                slug: slug,
+                name: name,
+                displayName: name,
+                description: description,
+                parameters: tool.function?.parameters || {},
+                // Categorize tools by operation type
+                category: categorizeGmailTool(slug)
+            };
+        });
         // Group tools by category for easier understanding
         const categorizedTools = {
             fetch: toolsInfo.filter((tool) => tool.category === 'fetch'),

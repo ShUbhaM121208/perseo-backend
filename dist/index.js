@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import gmailRouter from "./routes/gmail.js";
+import chatRouter from "./routes/chat.js";
+import onboardingRoutes from './routes/onboarding.js';
+import composioRoutes from './routes/composio.js';
 // Load environment variables
 dotenv.config();
 const app = express();
@@ -22,6 +25,9 @@ app.get('/health', (req, res) => {
 });
 // API routes
 app.use("/api/gmail", gmailRouter);
+app.use("/api", chatRouter);
+app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/composio", composioRoutes);
 // 404 handler
 app.use('*', (req, res) => {
     res.status(404).json({
@@ -33,6 +39,11 @@ app.use('*', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Backend server running on http://localhost:${PORT}`);
     console.log(`📄 Health check: http://localhost:${PORT}/health`);
+    // Development logging
+    if (process.env.NODE_ENV !== 'production') {
+        console.log(`🔐 Supabase integration active`);
+        console.log(`📋 Onboarding API: http://localhost:${PORT}/api/onboarding`);
+    }
 });
 export default app;
 //# sourceMappingURL=index.js.map

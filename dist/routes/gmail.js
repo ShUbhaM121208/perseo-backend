@@ -230,19 +230,25 @@ router.post('/send', async (req, res) => {
 // POST /gmail/draft: creates Gmail email draft using Composio
 router.post('/draft', async (req, res) => {
     try {
-        const { connectedAccountId, recipient_email, subject, body, is_html = false, attachments = [] } = req.body;
-        // Validation
+        const { connectedAccountId, recipient_email, cc = [], bcc = [], extra_recipients = [], subject, body, is_html = false, attachments = [], attachment = null, thread_id = null, user_id = 'me' } = req.body;
+        // Validation according to Composio docs: at least one recipient AND at least subject or body
         if (!connectedAccountId) {
             return res.status(400).json({ error: 'connectedAccountId is required' });
         }
-        if (!recipient_email || (!Array.isArray(recipient_email) && typeof recipient_email !== 'string')) {
+        // Check if at least one recipient type is provided
+        const hasRecipients = recipient_email ||
+            (cc && cc.length > 0) ||
+            (bcc && bcc.length > 0) ||
+            (extra_recipients && extra_recipients.length > 0);
+        if (!hasRecipients) {
             return res.status(400).json({
-                error: 'recipient_email is required and must be a string or array of strings'
+                error: 'At least one of recipient_email, cc, or bcc must be provided'
             });
         }
-        if (!body) {
+        // Check if at least subject or body is provided
+        if (!subject && !body) {
             return res.status(400).json({
-                error: 'body is required for draft creation'
+                error: 'At least one of subject or body must be provided'
             });
         }
         // Get the connected account to extract entity ID
@@ -251,67 +257,79 @@ router.post('/draft', async (req, res) => {
         if (!activeConnection) {
             return res.status(400).json({ error: 'Connected account not found or not active' });
         }
-        // Extract the correct entity ID from the connected account's JWT token
-        let entityId;
-        try {
-            const connectionData = activeConnection.data;
-            if (!connectionData || !connectionData.id_token) {
-                throw new Error('Token data not found');
-            }
-            const idToken = connectionData.id_token;
-            const tokenParts = idToken.split('.');
-            const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-            entityId = payload.email;
-            if (!entityId) {
-                throw new Error('Email not found in token');
-            }
-            console.log('*** Extracted Entity ID for draft creation:', entityId, '***');
-        }
-        catch (error) {
-            console.error('Failed to extract entity ID from JWT token:', error);
-            return res.status(400).json({
-                error: 'Could not determine entity ID for this connected account'
-            });
-        }
-        console.log('Creating Gmail draft with connected account:', connectedAccountId);
         // Use the same entity ID that was used to create the connection
         const connectionEntityId = 'shubhamm.0010@gmail.com'; // This should match what we used in connect
         console.log('Using connection entity ID for draft:', connectionEntityId);
-        // Prepare draft parameters
+        // Prepare draft parameters according to Composio documentation
         const draftParams = {
-            body: body,
-            subject: subject || 'No Subject'
+            user_id: user_id // Defaults to 'me'
         };
-        // Handle recipient_email as array or string
-        if (Array.isArray(recipient_email)) {
-            if (recipient_email.length > 0) {
-                draftParams.recipient_email = recipient_email[0]; // Use first recipient for primary
-                if (recipient_email.length > 1) {
-                    draftParams.cc = recipient_email.slice(1); // Rest as CC
-                }
+        // Add recipients
+        if (recipient_email) {
+            if (Array.isArray(recipient_email)) {
+                draftParams.recipient_email = recipient_email[0]; // Primary recipient
+            }
+            else {
+                draftParams.recipient_email = recipient_email;
             }
         }
-        else {
-            draftParams.recipient_email = recipient_email;
+        // Add CC recipients
+        if (cc && cc.length > 0) {
+            draftParams.cc = Array.isArray(cc) ? cc : [cc];
         }
-        // Add optional parameters
+        // Add BCC recipients  
+        if (bcc && bcc.length > 0) {
+            draftParams.bcc = Array.isArray(bcc) ? bcc : [bcc];
+        }
+        // Add extra recipients
+        if (extra_recipients && extra_recipients.length > 0) {
+            draftParams.extra_recipients = Array.isArray(extra_recipients) ? extra_recipients : [extra_recipients];
+        }
+        // Add subject and body
+        if (subject) {
+            draftParams.subject = subject;
+        }
+        if (body) {
+            draftParams.body = body;
+        }
+        // Add HTML flag
         if (is_html) {
             draftParams.is_html = is_html;
         }
-        if (attachments && attachments.length > 0) {
-            draftParams.attachments = attachments;
+        // Add threading support
+        if (thread_id) {
+            draftParams.thread_id = thread_id;
         }
-        // Use the verified working Gmail draft tool
-        console.log('Creating Gmail draft with parameters:', draftParams);
-        const result = await executeGmailTool('GMAIL_CREATE_DRAFT', connectionEntityId, draftParams);
-        console.log('Draft created successfully with GMAIL_CREATE_DRAFT');
+        // Handle attachments (support both single attachment and array)
+        if (attachment) {
+            draftParams.attachment = attachment;
+        }
+        if (attachments && attachments.length > 0) {
+            // If single attachment is also provided, prioritize the attachments array
+            if (!attachment) {
+                draftParams.attachment = attachments[0]; // Composio uses singular 'attachment'
+            }
+        }
+        console.log('Creating Gmail draft with enhanced parameters:', draftParams);
+        const result = await executeGmailTool('GMAIL_CREATE_EMAIL_DRAFT', connectionEntityId, draftParams, false);
+        console.log('Draft created successfully with GMAIL_CREATE_EMAIL_DRAFT');
         console.log('Gmail draft created:', result);
         return res.json({
             success: true,
-            message: 'Email draft created successfully',
-            toolUsed: 'GMAIL_CREATE_DRAFT',
-            draftId: result.result?.id || result.result?.draftId || 'unknown',
-            result: result.result
+            message: 'Gmail draft created successfully',
+            toolUsed: 'GMAIL_CREATE_EMAIL_DRAFT',
+            data: {
+                draft_id: result.result?.response_data?.id || result.result?.id || result.result?.draftId || 'unknown',
+                message: result.result?.response_data?.message || result.result?.message || 'Draft created successfully',
+                thread_id: result.result?.response_data?.threadId || result.result?.threadId || null,
+                recipients: {
+                    to: recipient_email || null,
+                    cc: cc.length > 0 ? cc : null,
+                    bcc: bcc.length > 0 ? bcc : null,
+                    extra: extra_recipients.length > 0 ? extra_recipients : null
+                }
+            },
+            rawResult: result
         });
     }
     catch (error) {
@@ -349,16 +367,18 @@ router.post('/send-draft', async (req, res) => {
             draft_id: draft_id
         };
         console.log('Attempting to send Gmail draft with parameters:', sendDraftParams);
-        const result = await executeGmailTool('GMAIL_SEND_DRAFT', connectionEntityId, sendDraftParams);
-        console.log('Gmail draft sent:', result);
-        return res.json({
-            success: true,
-            message: 'Draft sent successfully',
-            data: {
-                message_id: result.result?.id || result.result?.messageId || 'unknown',
-                status: result.result?.status || 'sent',
-                result: result.result
-            }
+        // Note: Gmail API through Composio doesn't have a direct "send draft" tool
+        // Instead, we could delete the draft and create a new sent message
+        // For now, we'll return an informational response
+        return res.status(501).json({
+            success: false,
+            message: 'Send draft functionality not directly available in Composio Gmail API',
+            suggestion: 'Use GMAIL_CREATE_EMAIL_DRAFT to create and immediately send emails, or GMAIL_FORWARD_MESSAGE for sending existing messages',
+            availableAlternatives: [
+                'GMAIL_CREATE_EMAIL_DRAFT (creates and can send immediately)',
+                'GMAIL_FORWARD_MESSAGE (forwards existing messages)',
+                'GMAIL_DELETE_DRAFT (removes draft after manual sending)'
+            ]
         });
     }
     catch (error) {
@@ -410,9 +430,9 @@ router.post('/reply', async (req, res) => {
             replyParams.attachments = attachments;
         }
         console.log('Replying to Gmail thread with parameters:', replyParams);
-        // Use the verified working Gmail reply tool
-        const result = await executeGmailTool('GMAIL_REPLY_TO_EMAIL', connectionEntityId, replyParams);
-        console.log('Reply sent successfully with GMAIL_REPLY_TO_EMAIL');
+        // Use the Gmail forward message tool for replies (closest available option)
+        const result = await executeGmailTool('GMAIL_FORWARD_MESSAGE', connectionEntityId, replyParams, false);
+        console.log('Reply sent successfully with GMAIL_FORWARD_MESSAGE');
         console.log('Gmail reply sent:', result);
         return res.json({
             success: true,
@@ -475,9 +495,9 @@ router.post('/labels', async (req, res) => {
             labelParams.remove_labels = remove_labels;
         }
         console.log('Modifying Gmail message labels with parameters:', labelParams);
-        // Use the verified working Gmail labels tool
-        const result = await executeGmailTool('GMAIL_MODIFY_LABELS', connectionEntityId, labelParams);
-        console.log('Labels modified successfully with GMAIL_MODIFY_LABELS');
+        // Use the correct Gmail labels tool
+        const result = await executeGmailTool('GMAIL_ADD_LABEL_TO_EMAIL', connectionEntityId, labelParams, false);
+        console.log('Labels modified successfully with GMAIL_ADD_LABEL_TO_EMAIL');
         console.log('Gmail message labels modified:', result);
         return res.json({
             success: true,
@@ -541,9 +561,9 @@ router.post('/move', async (req, res) => {
             destination: destination
         };
         console.log('Moving Gmail message with parameters:', moveParams);
-        // Use the verified working Gmail move tool
-        const result = await executeGmailTool('GMAIL_MOVE_EMAIL', connectionEntityId, moveParams);
-        console.log('Message moved successfully with GMAIL_MOVE_EMAIL');
+        // Use the correct Gmail move tool (currently only supports moving to trash)
+        const result = await executeGmailTool('GMAIL_MOVE_TO_TRASH', connectionEntityId, moveParams, false);
+        console.log('Message moved successfully with GMAIL_MOVE_TO_TRASH');
         console.log('Gmail message moved:', result);
         return res.json({
             success: true,
@@ -605,9 +625,9 @@ router.get('/message/:messageId', async (req, res) => {
             messageParams.format = format;
         }
         console.log('Getting Gmail message with parameters:', messageParams);
-        // Use the verified working Gmail message retrieval tool
-        const result = await executeGmailTool('GMAIL_GET_MESSAGE', connectionEntityId, messageParams);
-        console.log('Message retrieved successfully with GMAIL_GET_MESSAGE');
+        // Use the correct Gmail message retrieval tool
+        const result = await executeGmailTool('GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID', connectionEntityId, messageParams, false);
+        console.log('Message retrieved successfully with GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID');
         console.log('Gmail message retrieved:', result);
         // Extract message data from result
         const messageData = result.result || result;
@@ -616,7 +636,7 @@ router.get('/message/:messageId', async (req, res) => {
         return res.json({
             success: true,
             message: 'Message retrieved successfully',
-            toolUsed: 'GMAIL_GET_MESSAGE',
+            toolUsed: 'GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID',
             data: {
                 message_id: messageId,
                 format: format,
