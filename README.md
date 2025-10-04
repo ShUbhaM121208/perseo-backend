@@ -9,6 +9,7 @@
 - [AI Services](#ai-services)
 - [API Endpoints](#api-endpoints)
 - [Authentication](#authentication)
+- [Supabase Integration](#supabase-integration)
 - [Environment Configuration](#environment-configuration)
 - [Development](#development)
 
@@ -37,8 +38,10 @@
   "language": "TypeScript 5.3.3",
   "ai_service": "Google Generative AI",
   "gmail_integration": "Composio Core",
+  "database": "Supabase PostgreSQL",
   "cors": "CORS 2.8.5",
-  "environment": "dotenv 16.3.1"
+  "environment": "dotenv 16.3.1",
+  "testing": "Jest + Supertest"
 }
 ```
 
@@ -47,8 +50,10 @@
 {
   "ai_provider": "Google Gemini (gemini-2.0-flash-exp)",
   "email_toolkit": "Composio Gmail Integration",
-  "authentication": "Composio OAuth",
-  "api_management": "Composio API Key"
+  "authentication": "Composio OAuth + Supabase Auth",
+  "api_management": "Composio API Key",
+  "database": "Supabase (PostgreSQL + Auth + Real-time)",
+  "storage": "Supabase Storage"
 }
 ```
 
@@ -60,16 +65,28 @@
 src/
 ├── index.ts              # Express server entry point
 ├── routes/               # API route handlers
-│   └── chat.ts          # Main chat/AI endpoint
+│   ├── chat.ts          # Main chat/AI endpoint  
+│   └── onboarding.ts    # Onboarding API endpoints
 ├── services/            # Business logic services
-│   └── gemini.ts        # AI service integration
+│   ├── gemini.ts        # AI service integration
+│   └── onboardingService.ts # Supabase onboarding service
 ├── middleware/          # Express middleware
+│   └── supabaseAuth.ts  # Supabase JWT authentication
+├── db/                  # Database configuration
+│   └── supabaseClient.ts # Supabase client setup
+├── __tests__/           # Test suite
+│   ├── setup.ts         # Test configuration
+│   └── onboarding.test.ts # Onboarding endpoint tests
 ├── types/               # TypeScript type definitions
 └── utils/               # Utility functions
 
 root/
 ├── dist/                # Compiled JavaScript output
+├── db/                  # Database migrations
+│   └── migrations/      # SQL migration files
+├── coverage/            # Test coverage reports
 ├── .env                 # Environment variables
+├── jest.config.js       # Jest test configuration
 ├── package.json         # Dependencies and scripts
 ├── tsconfig.json        # TypeScript configuration
 └── README.md            # Project documentation
@@ -424,6 +441,221 @@ const verifyGmailConnection = async (userId: string) => {
 
 ---
 
+## Supabase Integration
+
+### **Overview**
+Perseo Backend integrates with Supabase for user data persistence, specifically for storing onboarding preferences and user-specific configurations. The integration includes secure authentication middleware and service layer abstractions.
+
+### **Database Schema**
+The onboarding system uses a dedicated table to store user preferences:
+
+```sql
+-- Database Migration: db/migrations/001_create_onboardings.sql
+CREATE TABLE onboardings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL,
+  profession TEXT NOT NULL,
+  integrations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create index for performance
+CREATE INDEX idx_onboardings_user_id ON onboardings(user_id);
+
+-- Enable Row Level Security
+ALTER TABLE onboardings ENABLE ROW LEVEL SECURITY;
+
+-- Create policy for user access
+CREATE POLICY "Users can access their own onboarding data" ON onboardings
+  FOR ALL USING (auth.uid() = user_id);
+```
+
+### **API Endpoints**
+
+#### **POST /api/onboarding**
+Saves user onboarding preferences.
+
+```typescript
+// Request
+{
+  "purpose": "Personal",
+  "profession": "Software Engineer", 
+  "integrations": ["Gmail", "Calendar", "Drive"]
+}
+
+// Response
+{
+  "success": true,
+  "data": {
+    "user_id": "uuid",
+    "purpose": "Personal",
+    "profession": "Software Engineer",
+    "integrations": ["Gmail", "Calendar", "Drive"],
+    "created_at": "2025-10-04T10:00:00Z",
+    "updated_at": "2025-10-04T10:00:00Z"
+  }
+}
+```
+
+#### **GET /api/onboarding**
+Retrieves user onboarding preferences.
+
+```typescript
+// Response
+{
+  "success": true,
+  "data": {
+    "user_id": "uuid",
+    "purpose": "Personal", 
+    "profession": "Software Engineer",
+    "integrations": ["Gmail", "Calendar", "Drive"],
+    "created_at": "2025-10-04T10:00:00Z",
+    "updated_at": "2025-10-04T10:00:00Z"
+  }
+}
+```
+
+### **Security Implementation**
+
+#### **Authentication Middleware**
+```typescript
+// src/middleware/supabaseAuth.ts
+export const requireSupabaseAuth = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing or invalid authorization header' });
+  }
+
+  const token = authHeader.substring(7);
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  
+  if (error || !user) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  req.user = user;
+  next();
+};
+```
+
+#### **Service Layer**
+```typescript
+// src/services/onboardingService.ts
+export const saveOnboarding = async (userId: string, data: OnboardingData) => {
+  const { data: result, error } = await supabase
+    .from('onboardings')
+    .upsert({
+      user_id: userId,
+      purpose: data.purpose,
+      profession: data.profession,
+      integrations: data.integrations,
+      updated_at: new Date().toISOString()
+    })
+    .select()
+    .single();
+
+  return { success: !error, data: result, error: error?.message };
+};
+```
+
+### **Setup Instructions**
+
+#### **1. Database Migration**
+Run the SQL migration in your Supabase SQL Editor:
+```bash
+# 1. Go to Supabase Dashboard → SQL Editor
+# 2. Copy content from db/migrations/001_create_onboardings.sql
+# 3. Execute the migration script
+# 4. Verify table creation in Table Editor
+```
+
+#### **2. Environment Variables**
+```bash
+# Add to .env file
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+#### **3. Security Configuration**
+```bash
+# Supabase Dashboard → Settings → API
+# 1. Copy Project URL → SUPABASE_URL
+# 2. Copy service_role key → SUPABASE_SERVICE_ROLE_KEY
+# 3. Never expose service_role key to frontend!
+# 4. Frontend should use anon key only
+```
+
+### **Testing Locally**
+
+#### **Get Access Token (Frontend)**
+```typescript
+// Frontend: Get user access token
+const { data: { session } } = await supabase.auth.getSession();
+const accessToken = session?.access_token;
+```
+
+#### **Test API Endpoints**
+```bash
+# Test POST /api/onboarding
+curl -X POST http://localhost:3002/api/onboarding \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -d '{
+    "purpose": "Personal",
+    "profession": "Software Engineer",
+    "integrations": ["Gmail", "Calendar"]
+  }'
+
+# Test GET /api/onboarding  
+curl -X GET http://localhost:3002/api/onboarding \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+### **🚨 Security Warnings**
+
+#### **Critical Security Notes:**
+```bash
+⚠️  NEVER expose SUPABASE_SERVICE_ROLE_KEY to frontend
+⚠️  Service role key bypasses Row Level Security
+⚠️  Only use service role key in backend/server environments
+⚠️  Frontend should only use anon key + user auth tokens
+⚠️  Always validate JWT tokens in API middleware
+⚠️  Enable RLS on all tables with user data
+```
+
+#### **Production Checklist:**
+- ✅ RLS enabled on onboardings table
+- ✅ Service role key secured in backend only
+- ✅ JWT token validation in middleware
+- ✅ API endpoints protected with auth
+- ✅ Error messages don't leak sensitive info
+- ✅ CORS configured for allowed origins
+
+### **Testing Suite**
+```bash
+# Run tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Watch mode
+npm run test:watch
+```
+
+The test suite includes:
+- ✅ POST endpoint validation and error handling
+- ✅ GET endpoint success and error scenarios  
+- ✅ Authentication middleware testing
+- ✅ Service layer validation
+- ✅ Integration flow testing
+- ✅ Edge case handling
+
+---
+
 ## Environment Configuration
 
 ### **Required Environment Variables**
@@ -434,6 +666,10 @@ GOOGLE_GEMINI_API_KEY=your_gemini_api_key_here
 
 # Composio Integration
 COMPOSIO_API_KEY=your_composio_api_key_here
+
+# Supabase Integration
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 
 # Server Configuration
 PORT=3002
@@ -466,6 +702,17 @@ LOG_LEVEL=info
 # 4. Enable Gmail integration
 ```
 
+#### **3. Supabase Configuration**
+```bash
+# Visit: https://supabase.com/dashboard
+# 1. Create new project or select existing
+# 2. Go to Settings → API
+# 3. Copy Project URL → SUPABASE_URL
+# 4. Copy service_role key → SUPABASE_SERVICE_ROLE_KEY
+# 5. ⚠️ NEVER expose service_role key to frontend!
+# 6. Run database migration in SQL Editor
+```
+
 ---
 
 ## Development
@@ -486,6 +733,15 @@ npm start
 
 # Type checking
 npm run type-check
+
+# Testing
+npm test
+
+# Test with coverage
+npm run test:coverage
+
+# Test in watch mode
+npm run test:watch
 ```
 
 ### **Project Scripts**
@@ -495,7 +751,10 @@ npm run type-check
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   }
 }
 ```
