@@ -174,8 +174,6 @@ Respond with the appropriate JSON structure. Take action immediately when you ha
         }
       }
       
-      console.log('Extracted JSON string before cleaning:', JSON.stringify(jsonString));
-      
       // Clean the JSON string
       // 1. Remove any leading/trailing whitespace
       jsonString = jsonString.trim();
@@ -186,11 +184,7 @@ Respond with the appropriate JSON structure. Take action immediately when you ha
         return match.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
       });
       
-      console.log('Cleaned JSON string:', JSON.stringify(jsonString));
-      console.log('Character at position 88:', jsonString.charCodeAt(88), jsonString.charAt(88));
-      
       const parsedResponse = JSON.parse(jsonString);
-      console.log('Parsed Gemini response:', parsedResponse);
       return parsedResponse;
     } catch (parseError) {
       console.error('Failed to parse Gemini JSON response:', parseError);

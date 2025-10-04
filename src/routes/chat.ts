@@ -19,12 +19,6 @@ router.post('/chat', async (req, res) => {
     const tools = await composio.tools.get(userId, { toolkits: ['GMAIL'] });
 
     console.log('Retrieved Gmail tools for user:', userId);
-    console.log('Available tools count:', tools.length);
-    
-    // Debug: Log first tool structure to understand the format
-    if (tools.length > 0) {
-      console.log('First tool structure:', JSON.stringify(tools[0], null, 2));
-    }
 
     // Step 3: Call Gemini to process the user message and determine tool calls
     console.log('Calling Gemini to process message:', message);
